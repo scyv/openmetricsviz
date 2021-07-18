@@ -1,0 +1,248 @@
+<html>
+  <head>
+    <title>OpenMetrics Visualizer</title>
+
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+
+    <link rel="stylesheet" href="./bootstrap.min.css" />
+    <link rel="stylesheet" href="./chartist.min.css" />
+
+    <style>
+      .row {
+        margin-top: 10px;
+      }
+
+      .pastezone {
+        border-style: dashed;
+      }
+
+      .pastezone.clicked {
+        background-color: #f0ffcb;
+      }
+
+      .pastezone:not(.clicked) .step2 {
+        display: none;
+      }
+
+      .pastezone.clicked .step1 {
+        display: none;
+      }
+
+      .ct-chart {
+        max-height: 200px;
+      }
+
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <div class="row">
+        <div class="text-muted">
+          Welcome. This little tool visualizes OpenMetric content. Please refer
+          to
+          <a href="https://openmetrics.io">https://openmetrics.io</a> for
+          information about the expected input
+        </div>
+      </div>
+      <div class="row">
+        <div class="card pastezone">
+          <div class="card-body">
+            <span class="step1">
+              First, copy the metrics content from your source and then click
+              here to start.
+            </span>
+            <span class="step2">Now press CTRL+V</span>
+          </div>
+        </div>
+      </div>
+      <div class="row searchfield hidden">
+        <div class="mb-3">
+          <input
+            type="text"
+            class="form-control"
+            id="inputSearch"
+            aria-describedby="searchHelp"
+            placeholder="Type your search here"
+          />
+          <div id="searchHelp" class="form-text">
+            Enter your search here. We will filter non matching metrics for you
+            on the fly.
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="charts"></div>
+      </div>
+    </div>
+    <script src="./chartist.min.js"></script>
+    <script>
+      function createSeries(values) {
+        const series = values.map((value) => {
+          if (isNaN(value.value)) {
+            return 0;
+          }
+          return value.value;
+        });
+        return series;
+      }
+      function createCharts(types) {
+        types.forEach((type, idx) => {
+          const titleNode = document.createElement("div");
+          titleNode.classList.add("title");
+          const header = document.createElement("h4");
+          header.textContent = type.name;
+          titleNode.appendChild(header);
+          titleNode.appendChild(document.createTextNode(type.help));
+
+          const chartNode = document.createElement("div");
+          chartNode.classList.add("ct-chart");
+          chartNode.classList.add("ct-minor-seventh");
+          chartNode.id = "chart" + idx;
+
+          const metricNode = document.createElement("div");
+          metricNode.classList.add("metricnode");
+          metricNode.appendChild(titleNode);
+          metricNode.appendChild(chartNode);
+          document.querySelector(".charts").appendChild(metricNode);
+
+          const series = createSeries(type.values);
+
+          if (type.type === "gauge") {
+            const total = series.reduce((p, c) => c + p, 0);
+            new Chartist.Pie(
+              "#chart" + idx,
+              {
+                series: series,
+              },
+              {
+                donut: true,
+                donutWidth: 60,
+                startAngle: 270,
+                total: total * 2,
+                showLabel: true,
+              }
+            );
+          } else if (type.type === "summary") {
+            metricNode.appendChild(
+              document.createTextNode("Count: " + series[0])
+            );
+            new Chartist.Bar("#chart" + idx, {
+              labels: [type.name],
+              series: [series.slice(2)],
+            });
+          } else {
+            new Chartist.Bar("#chart" + idx, {
+              labels: [type.name],
+              series: [series],
+            });
+          }
+          metricNode.appendChild(document.createElement("hr"));
+        });
+      }
+
+      function readValue(lines, currentLineIdx) {
+        const lineParts = lines[currentLineIdx].split(" ");
+        const labels = [];
+
+        const value = parseFloat(lineParts[lineParts.length - 1]);
+        return {
+          labels,
+          value,
+        };
+      }
+
+      function readType(lines, currentLineIdx) {
+        const lineParts = lines[currentLineIdx].split(" ");
+        const name = lineParts[2];
+        const type = lineParts[3];
+        let help = "";
+        const values = [];
+        for (let idx = currentLineIdx + 1; idx < lines.length; idx++) {
+          const line = lines[idx];
+          if (line.startsWith("# HELP " + name)) {
+            help = line.substring(("# HELP " + name + " ").length);
+          }
+
+          if (line.startsWith(name)) {
+            values.push(readValue(lines, idx));
+          }
+
+          if (line.startsWith("# TYPE")) {
+            break;
+          }
+        }
+
+        return {
+          name,
+          type,
+          help,
+          values,
+        };
+      }
+
+      document
+        .querySelector(".pastezone .card-body")
+        .addEventListener("click", (event) => {
+          document.querySelector(".pastezone").classList.add("clicked");
+        });
+      document
+        .querySelector(".pastezone")
+        .addEventListener("paste", (event) => {
+          event.preventDefault();
+
+          document.querySelector(".charts").innerHTML = "";
+          document.querySelector(".searchfield").classList.add("hidden");
+          document.querySelector(".pastezone").classList.remove("clicked");
+
+          let paste = (event.clipboardData || window.clipboardData).getData(
+            "text"
+          );
+
+          const types = [];
+          const lines = paste.split("\n").map((line) => line.trim());
+          for (let idx = 0; idx < lines.length; idx++) {
+            if (lines[idx].startsWith("# TYPE")) {
+              types.push(readType(lines, idx));
+            }
+          }
+          if (types.length === 0) {
+            document.querySelector(".charts").innerHTML = `
+            <div class="alert alert-warning" role="alert">
+              Could not find any suitable data in your input.
+            </div>
+            `;
+          } else {
+            document.querySelector(".searchfield").classList.remove("hidden");
+            createCharts(types);
+          }
+        });
+
+      document
+        .querySelector(".searchfield")
+        .addEventListener("keyup", (event) => {
+          const text = event.target.value;
+          const elements = document.querySelectorAll(".metricnode");
+          if (text.length > 3) {
+            for (let idx = 0; idx < elements.length; idx++) {
+              if (elements[idx].textContent.indexOf(text) < 0) {
+                elements[idx].classList.add("hidden");
+              } else {
+                elements[idx].classList.remove("hidden");
+              }
+            }
+          } else {
+            for (let idx = 0; idx < elements.length; idx++) {
+              elements[idx].classList.remove("hidden");
+            }
+          }
+        });
+    </script>
+  </body>
+</html>
